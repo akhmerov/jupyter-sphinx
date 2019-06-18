@@ -28,3 +28,5 @@ extensions = [
 ]
 
 html_theme = 'alabaster'
+
+jupyter_sphinx_thebelab_config = 'thebelab_config.js'

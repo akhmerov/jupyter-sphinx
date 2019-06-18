@@ -7,7 +7,7 @@ import json
 
 import sphinx
 from sphinx.util import logging
-from sphinx.util.fileutil import copy_asset
+from sphinx.util.fileutil import copy_asset, copy_asset_file
 from sphinx.transforms import SphinxTransform
 from sphinx.errors import ExtensionError
 from sphinx.addnodes import download_reference
@@ -474,7 +474,7 @@ def attach_outputs(output_nodes, node, thebe_config):
                 '</pre>'.format(data=code, code_class=code_class),
             format='html',
         )]
-        
+
         if not node.attributes['hide_output']:
             # We ignore the code_below attribute since this is not supported with thebelab
             node.children.append(docutils.nodes.raw(
@@ -491,7 +491,7 @@ def attach_outputs(output_nodes, node, thebe_config):
     else:
         if node.attributes['hide_code']:
             node.children = []
-        
+
         if not node.attributes['hide_output']:
             if node.attributes['code_below']:
                 node.children = output_nodes + node.children
@@ -622,14 +622,12 @@ def build_finished(app, env):
             thebe_config['predefinedOutput'] = True
             thebe_config['requestKernel'] = True
             file.write(json.dumps(thebe_config))
-    elif isinstance(thebe_config, file):
-        copy_asset(thebe_config, thebe_config_dst)
     elif isinstance(thebe_config, str):
         if os.path.isabs(thebe_config):
-            copy_asset(thebe_config, thebe_config_dst)
+            copy_asset_file(thebe_config, thebe_config_dst)
         else:
-            filename = os.path.join(os.path.abspath(env.app.srcdir), thebe_config)
-            copy_asset(filename, thebe_config_dst)
+            filename = os.path.join(os.path.abspath(app.srcdir), thebe_config)
+            copy_asset_file(filename, thebe_config_dst)
 
 
 
@@ -664,9 +662,9 @@ def setup(app):
     app.add_config_value('jupyter_sphinx_require_url', REQUIRE_URL_DEFAULT, 'html')
     app.add_config_value('jupyter_sphinx_embed_url', None, 'html')
 
-    # thebelab config, can be either a path, file or a dict
+    # thebelab config, can be either a filename or a dict
     app.add_config_value('jupyter_sphinx_thebelab_config', None, 'html')
-    
+
     app.add_config_value('jupyter_sphinx_thebelab_url', THEBELAB_URL_DEFAULT, 'html')
 
     # JupyterKernelNode is just a doctree marker for the
