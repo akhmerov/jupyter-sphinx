@@ -2,6 +2,7 @@
 
 import os
 import json
+import contextlib
 from pathlib import Path
 
 import docutils
@@ -12,6 +13,7 @@ from sphinx.util.docutils import ReferenceRole
 from sphinx.addnodes import download_reference
 from sphinx.transforms import SphinxTransform
 from sphinx.environment.collectors.asset import ImageCollector
+from sphinx.errors import ExtensionError
 
 import ipywidgets.embed
 import nbconvert
@@ -183,6 +185,35 @@ class CellOutputBundleNode(docutils.nodes.container):
         super().__init__("", **attributes)
 
 
+class MimeBundleNode(docutils.nodes.container):
+    """A node with multiple representations rendering as the highest priority one."""
+
+    def __init__(self, rawsource="", *children, **attributes):
+        super().__init__("", *children, mimetypes=attributes["mimetypes"])
+
+    def render_as(self, visitor):
+        """Determine which node to show based on the visitor"""
+        try:
+            # Or should we go to config via the node?
+            priority = visitor.builder.env.app.config[
+                'mime_render_priority_' + visitor.builder.format
+            ]
+        except (AttributeError, KeyError):
+            return super()
+        for mimetype in priority:
+            try:
+                return self.children[self.attributes['mimetypes'].index(mimetype)]
+            except ValueError:
+                pass
+        return super()
+
+    def walk(self, visitor):
+        return self.render_as(visitor).walk(visitor)
+
+    def walkabout(self, visitor):
+        return self.render_as(visitor).walkabout(visitor)
+
+
 class JupyterKernelNode(docutils.nodes.Element):
     """Inserted into doctree whenever a JupyterKernel directive is encountered.
 
@@ -231,7 +262,7 @@ class JupyterWidgetStateNode(docutils.nodes.Element):
         )
 
 
-def cell_output_to_nodes(outputs, data_priority, write_stderr, out_dir,
+def cell_output_to_nodes(outputs, write_stderr, out_dir,
                          thebe_config, inline=False):
     """Convert a jupyter cell with outputs and filenames to doctree nodes.
 
@@ -256,12 +287,7 @@ def cell_output_to_nodes(outputs, data_priority, write_stderr, out_dir,
         Each output, converted into a docutils node.
     """
     # If we're in `inline` mode, ensure that we don't add block-level nodes
-    if inline:
-        literal_node = docutils.nodes.literal
-        math_node = docutils.nodes.math
-    else:
-        literal_node = docutils.nodes.literal_block
-        math_node = math_block
+    literal_node = docutils.nodes.literal if inline else docutils.nodes.literal_block
 
     to_add = []
     for output in outputs:
@@ -314,62 +340,84 @@ def cell_output_to_nodes(outputs, data_priority, write_stderr, out_dir,
                 )
             )
         elif output_type in ("display_data", "execute_result"):
-            try:
-                # First mime_type by priority that occurs in output.
-                mime_type = next(x for x in data_priority if x in output["data"])
-            except StopIteration:
-                continue
-            data = output["data"][mime_type]
-            if mime_type.startswith("image"):
-                file_path = Path(output.metadata["filenames"][mime_type])
-                out_dir = Path(out_dir)
-                # Sphinx treats absolute paths as being rooted at the source
-                # directory, so make a relative path, which Sphinx treats
-                # as being relative to the current working directory.
-                filename = file_path.name
+            children_by_mimetype = {
+                mime_type: output2sphinx(
+                    data, mime_type, output["metadata"], out_dir
+                )
+                for mime_type, data in output["data"].items()
 
-                if out_dir in file_path.parents:
-                    out_dir = file_path.parent
-
-                uri = (out_dir / filename).as_posix()
-                to_add.append(docutils.nodes.image(uri=uri))
-            elif mime_type == "text/html":
-                to_add.append(
-                    docutils.nodes.raw(
-                        text=data, format="html", classes=["output", "text_html"]
-                    )
-                )
-            elif mime_type == "text/latex":
-                to_add.append(
-                    math_node(
-                        text=strip_latex_delimiters(data),
-                        nowrap=False,
-                        number=None,
-                        classes=["output", "text_latex"],
-                    )
-                )
-            elif mime_type == "text/plain":
-                to_add.append(
-                    literal_node(
-                        text=data,
-                        rawsource=data,
-                        language="none",
-                        classes=["output", "text_plain"],
-                    )
-                )
-            elif mime_type == "application/javascript":
-                to_add.append(
-                    docutils.nodes.raw(
-                        text='<script type="{mime_type}">{data}</script>'.format(
-                            mime_type=mime_type, data=data
-                        ),
-                        format="html",
-                    )
-                )
-            elif mime_type == WIDGET_VIEW_MIMETYPE:
-                to_add.append(JupyterWidgetViewNode(view_spec=data))
+            }
+            # Filter out unknown mimetypes
+            # TODO: rewrite this using walrus once we depend on Python 3.8
+            children_by_mimetype = {
+                mime_type: node
+                for mime_type, node in children_by_mimetype.items()
+                if node is not None
+            }
+            to_add.append(MimeBundleNode(
+                "",
+                *list(children_by_mimetype.values()),
+                mimetypes=list(children_by_mimetype.keys())
+            ))
 
     return to_add
+
+
+def output2sphinx(data, mime_type, metadata, out_dir, inline=False):
+    """Convert a Jupyter output with a specific mimetype to its sphinx representation."""
+    # This only works lazily because the logger is inited by Sphinx
+    from . import logger
+
+    # If we're in `inline` mode, ensure that we don't add block-level nodes
+    if inline:
+        literal_node = docutils.nodes.literal
+        math_node = docutils.nodes.math
+    else:
+        literal_node = docutils.nodes.literal_block
+        math_node = math_block
+
+    if mime_type == "text/html":
+        return docutils.nodes.raw(
+            text=data, format="html", classes=["output", "text_html"]
+        )
+    elif mime_type == "text/plain":
+        return literal_node(
+            text=data,
+            rawsource=data,
+            language="none",
+            classes=["output", "text_plain"],
+        )
+    elif mime_type == "text/latex":
+        return math_node(
+            text=strip_latex_delimiters(data),
+            nowrap=False,
+            number=None,
+            classes=["output", "text_latex"],
+        )
+    elif mime_type == "application/javascript":
+        return docutils.nodes.raw(
+            text='<script type="{mime_type}">{data}</script>'.format(
+                mime_type=mime_type, data=data
+            ),
+            format="html",
+        )
+    elif mime_type == WIDGET_VIEW_MIMETYPE:
+        return JupyterWidgetViewNode(view_spec=data)
+    elif mime_type.startswith("image"):
+        file_path = Path(metadata["filenames"][mime_type])
+        out_dir = Path(out_dir)
+        # Sphinx treats absolute paths as being rooted at the source
+        # directory, so make a relative path, which Sphinx treats
+        # as being relative to the current working directory.
+        filename = file_path.name
+
+        if out_dir in file_path.parents:
+            out_dir = file_path.parent
+
+        uri = (out_dir / filename).as_posix()
+        return docutils.nodes.image(uri=uri)
+    else:
+        logger.debug(f'Unknown mime type in cell output: {mime_type}')
 
 
 def attach_outputs(output_nodes, node, thebe_config):
@@ -428,7 +476,7 @@ def get_widgets(notebook):
     try:
         return notebook.metadata.widgets[WIDGET_STATE_MIMETYPE]
     except AttributeError:
-        # Don't catch KeyError, as it's a bug if 'widgets' does
+        # Don't catch KeyError because it's a bug if 'widgets' does
         # not contain 'WIDGET_STATE_MIMETYPE'
         return None
 
@@ -447,11 +495,9 @@ class CellOutputsToNodes(SphinxTransform):
             # Create doctree nodes for cell outputs.
             output_nodes = cell_output_to_nodes(
                 output_bundle_node.outputs,
-                self.config.jupyter_execute_data_priority,
                 bool(cell_node.attributes["stderr"]),
                 sphinx_abs_dir(self.env),
                 thebe_config,
             )
             # Remove the outputbundlenode and we'll attach the outputs next
             attach_outputs(output_nodes, cell_node, thebe_config)
-

@@ -416,6 +416,16 @@ jupyter_sphinx_continue_linenos
     Whether to continue line numbering from previous cell in all ``jupyter-execute``
     sources.
 
+Testing stuff
+-------------
+
+.. jupyter-execute::
+
+  display({
+    "text/html": "<h1>Look ma, it's HTML</h1>",
+    "text/plain": "Oh no, just plain text :(",
+  }, raw=True)
+
 Changelog
 ---------
 

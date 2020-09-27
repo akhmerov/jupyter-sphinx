@@ -162,6 +162,31 @@ def setup(app):
         ],
         "env",
     )
+    app.add_config_value(
+        "mime_render_priority_html",
+        [
+            WIDGET_VIEW_MIMETYPE,
+            "application/javascript",
+            "text/html",
+            "image/svg+xml",
+            "image/png",
+            "image/jpeg",
+            "text/latex",
+            "text/plain",
+        ],
+        "env",
+    )
+    app.add_config_value(
+        "mime_render_priority_latex",
+        [
+            "image/svg+xml",
+            "image/png",
+            "image/jpeg",
+            "text/latex",
+            "text/plain",
+        ],
+        "env",
+    )
 
     # ipywidgets config
     app.add_config_value("jupyter_sphinx_require_url", REQUIRE_URL_DEFAULT, "html")
